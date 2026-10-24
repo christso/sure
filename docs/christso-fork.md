@@ -11,9 +11,9 @@ patch is added, changed, or retired.
 
 - `main` mirrors `we-promise/sure:main`. Keep it free of fork-specific commits.
 - `christso/main` is the default branch and holds reviewed local patches. It
-  starts at the deployed `v0.7.5-alpha.9` source commit,
-  `ab457b47370ae69964a835acea96083edd4b13d9`, to keep this repair separate from
-  an upstream version upgrade.
+  now includes upstream `09df1b14f14389a02c3939f98410a6cbff64fef9`
+  (`v0.7.6-alpha.10` source), merged on 2026-10-25. Repository updates and
+  production deployment versions are recorded separately.
 - `upstream` is the local Git remote for `https://github.com/we-promise/sure.git`.
 
 The **Sync upstream main** workflow is scheduled every six hours. It checks that
@@ -29,16 +29,15 @@ push does not publish a release or deploy an application.
 
 ## Patch register
 
-The application baseline is upstream `v0.7.5-alpha.9`, commit
-[`ab457b47370ae69964a835acea96083edd4b13d9`](https://github.com/we-promise/sure/commit/ab457b47370ae69964a835acea96083edd4b13d9).
-The upstream behavior below refers to that baseline, not every newer upstream
-revision. Upstream tracking was checked on 2026-10-24.
+The current upstream source baseline is
+[`09df1b14f14389a02c3939f98410a6cbff64fef9`](https://github.com/we-promise/sure/commit/09df1b14f14389a02c3939f98410a6cbff64fef9),
+which reports `v0.7.6-alpha.10`. Upstream tracking was checked on 2026-10-25.
 
-| Area | Upstream baseline | Christso fork | Tracking and retirement condition |
+| Area | Current upstream | Christso fork | Status and retirement condition |
 | --- | --- | --- | --- |
-| Reimporting matched transfers | Import-time kind inference can overwrite the kind assigned by transfer matching. A loan's receiving leg can become an expense again. | Preserve the kind of a transaction already linked to a transfer; cover SimpleFIN, Up, and the Redbark processor. | Backport of [upstream PR #3714](https://github.com/we-promise/sure/pull/3714), still open when checked. Remove the duplicate implementation when the chosen upstream revision includes equivalent behavior and regressions pass. |
-| Existing misclassified loan inflows | Stale `loan_payment` kinds can double-count a paired repayment and appear under Uncategorized. | Repair transfer inflows to `funds_movement`; preserve the bank-side repayment. | Same upstream proposal. Reconcile migration versions and already-applied history before removing or replacing the local migration. |
-| Cached reports after repair | The proposed upstream migration changes transaction kinds without touching the entries used to version cached reports. | Touch repaired entries' timestamps in the same SQL statement; a warm-cache regression verifies corrected totals. | Local addition to the proposed patch. Retain until the upgrade also invalidates cached reports correctly. |
+| Reimporting matched transfers | [PR #3719](https://github.com/we-promise/sure/pull/3719) derives confirmed transfer kinds on reimport and repairs stale kinds. Pending suggestions keep their standalone kinds until confirmed. | Uses the upstream importer unchanged. Keeps additional SimpleFIN, Up, and Redbark regressions. | The original importer override from proposed PR #3714 was retired during this upgrade; equivalent behavior arrived through #3719. |
+| Existing misclassified loan inflows | Confirmed transfer inflows self-heal on reimport. A separate upstream migration resets the kinds of unconfirmed transfer suggestions. | Retains the already-deployed `20260926171500` bulk repair and its migration tests. | Preserve applied migration history. On a fresh upgrade, the historical repair precedes upstream's pending-suggestion reset. |
+| Cached reports after bulk repair | The original proposed repair changed kinds without touching report-cache version timestamps. | The retained historical repair touches repaired entries in the same SQL statement, with warm-cache regression coverage. | Retain with the historical migration; image rollback does not undo its changes. |
 | Repository automation | Upstream workflows serve the upstream project's branches and release infrastructure. | Mirror upstream into `main` every six hours; run CI on `christso/main`; keep inherited release/publishing workflows disabled. | Fork infrastructure, retained while these branch conventions apply. Recheck workflow changes and enabled workflows during upgrades. |
 
 Regression evidence lives in the
@@ -50,16 +49,22 @@ patch register.
 
 ## Loan-transfer repair details
 
-The first patch backports upstream [PR #3714](https://github.com/we-promise/sure/pull/3714),
-revision `492a9829c1e4ed86b427c2d72f695a86ea75ca6b`:
+The first patch backported proposed upstream
+[PR #3714](https://github.com/we-promise/sure/pull/3714), revision
+`492a9829c1e4ed86b427c2d72f695a86ea75ca6b`, onto the then-deployed version.
+The 2026-10-25 upgrade adopts upstream's equivalent importer implementation
+from PR #3719 instead of retaining that override.
 
-- Provider imports preserve the kind of transactions already paired by a transfer.
-- A data migration resets stale `loan_payment` kinds on transfer inflows to
-  `funds_movement`. Bank-side repayments keep their existing budget treatment.
-- Regression coverage includes the upstream SimpleFIN/Up scenarios and the
-  actual Redbark transaction processor, with pending and confirmed transfer links.
-- The repair also touches the repaired entries' timestamps to invalidate cached
-  financial reports. A warm-cache regression covers this addition to the upstream patch.
+- Confirmed transfer legs retain the kind derived from their transfer on import.
+- Automatically suggested transfers remain pending until explicitly confirmed;
+  reimporting a suggestion does not confirm it or suppress its standalone cashflow.
+- The historical data migration resets stale `loan_payment` kinds on transfer
+  inflows to `funds_movement` and touches their entry timestamps to invalidate
+  cached reports. The subsequent upstream migration
+  `20260927200000_reset_kinds_of_pending_transfer_matches` restores standalone
+  kinds for pending suggestions. Both migration identities remain intact.
+- Regression coverage includes SimpleFIN/Up, the actual Redbark processor,
+  confirmed and pending transfer behavior, and the bulk repair's warm cache.
 
 The migration covers existing transfer inflows across the database, including
 pending links. It changes transaction kinds and repaired entry timestamps;
@@ -73,6 +78,19 @@ Source preparation and CI do not authorize or perform a production migration.
 Build and deploy a pinned image only after validating the target database and
 the web/worker rollout together. Keep production data and credentials out of
 this public source repository and GitHub Actions.
+
+## Upgrade history
+
+| Date | Upstream source | Reason |
+| --- | --- | --- |
+| 2026-10-24 | `ab457b47370ae69964a835acea96083edd4b13d9` (`v0.7.5-alpha.9`) | Initial repair used the September 15 source already deployed, to isolate the fix from an application upgrade. This inherited the existing upstream backlog. |
+| 2026-10-25 | `09df1b14f14389a02c3939f98410a6cbff64fef9` (`v0.7.6-alpha.10` source) | Merge all 409 missing upstream commits into the patch branch; retire the superseded importer override and preserve the repair migration. |
+
+GitHub's fork banner compares the default branch, `christso/main`, with upstream.
+The 409-commit gap shown before this upgrade accumulated since the September
+baseline; it was not one day's new upstream work or a failed mirror sync.
+Production still uses its separately pinned deployment until an application
+rollout is performed.
 
 ## Upstream update policy
 
@@ -158,13 +176,16 @@ Keep the previous image and a tested database recovery path. Image rollback
 alone cannot undo an irreversible migration; choose rollback or a forward fix
 according to the actual schema and data changes rehearsed for that upgrade.
 
-## Visual comparison
+## Historical visual comparison
 
 Use the same synthetic fixture, period, currency, viewport, and capture method
 for both states. Label the source revision and whether the image shows the
 upstream baseline, an unrepaired data state, or the patched result. Screenshots
 illustrate the report; regression tests verify import persistence, pending
 transfers, cache invalidation, and preserved financial records.
+
+These captures document the original repair on the older deployed baseline.
+They do not represent the current upstream dashboard or unconfirmed suggestions.
 
 For the loan-transfer repair, the comparison fixture is a USD 500 repayment from
 a checking account to a loan account, with the bank side categorized as Loan

@@ -12,6 +12,7 @@ class RepairLoanPaymentOnTransferInflowsMigrationTest < ActiveSupport::TestCase
     @outflow = import(@checking, "out_1", 500)
     @inflow = import(@loan, "in_1", -500)
     @family.auto_match_transfers!
+    @inflow.transaction.reload.transfer.confirm!
     # The state earlier syncs left behind: the matched inflow leg re-stamped.
     @inflow.transaction.update_columns(kind: "loan_payment")
 
