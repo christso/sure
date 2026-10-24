@@ -104,6 +104,48 @@ class RedbarkAccount::ProcessorTest < ActiveSupport::TestCase
     assert_equal true, entry.entryable.extra.dig("redbark", "pending")
   end
 
+  test "reimporting a matched loan repayment keeps pending and confirmed transfers cash neutral on the loan side" do
+    loan = @family.accounts.create!(
+      name: "Test loan", balance: 10_000, currency: "AUD", accountable: Loan.new
+    )
+    loan_provider = @redbark_account.redbark_item.redbark_accounts.create!(
+      redbark_account_id: "rb_test_loan", name: "Test loan", currency: "AUD"
+    )
+    loan_provider.ensure_account_provider!(loan)
+
+    [ [ @redbark_account, "bank_repayment", "-500.00" ],
+      [ loan_provider, "loan_repayment", "500.00" ] ].each do |provider, id, amount|
+      provider.update!(raw_transactions_payload: [
+        { "id" => id, "status" => "posted", "date" => Date.current.to_s,
+          "description" => "Loan repayment", "amount" => amount }
+      ])
+      result = RedbarkAccount::Transactions::Processor.new(provider).process
+      assert result[:success]
+    end
+
+    @family.auto_match_transfers!
+    inflow = loan.entries.find_by!(external_id: "redbark_loan_repayment").transaction
+    transfer = inflow.transfer
+    assert transfer.pending?
+
+    2.times do
+      [ @redbark_account, loan_provider ].each do |provider|
+        result = RedbarkAccount::Transactions::Processor.new(provider).process
+        assert result[:success]
+      end
+
+      assert_equal "funds_movement", inflow.reload.kind
+      assert_equal "loan_payment", transfer.outflow_transaction.reload.kind
+      statement = IncomeStatement.new(@family).totals(
+        transactions_scope: Transaction.where(id: [ inflow.id, transfer.outflow_transaction_id ]),
+        date_range: Date.current..Date.current
+      )
+      assert_equal 500, statement.expense_money.amount.to_i
+      assert_equal 0, statement.income_money.amount.to_i
+      transfer.confirm!
+    end
+  end
+
   test "transactions processor handles missing transaction id gracefully" do
     @redbark_account.update!(raw_transactions_payload: [
       { "id" => nil, "amount" => "-50.00", "date" => Date.current.to_s }
