@@ -1,0 +1,40 @@
+name: Sync upstream main
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'christso/sure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the upstream mirror branch
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a fast-forward from upstream
+        run: |
+          git fetch https://github.com/we-promise/sure.git main
+          git merge-base --is-ancestor HEAD FETCH_HEAD
+
+      - name: Sync the fork and verify the mirror
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/merge-upstream" -f branch=main
+          git fetch origin main
+          fork_head=$(git rev-parse FETCH_HEAD)
+          git fetch https://github.com/we-promise/sure.git main
+          test "$fork_head" = "$(git rev-parse FETCH_HEAD)"

@@ -1,0 +1,14 @@
+name: Christso CI
+
+on:
+  push:
+    branches: [christso/main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    if: github.repository == 'christso/sure'
+    uses: ./.github/workflows/ci.yml
